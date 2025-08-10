@@ -1,0 +1,8 @@
+{
+  "device_types": ["DOZEE", "NX", "ABC"],
+  "wards": ["ICU", "General", "Automation Test"],
+  "organization_info": {
+    "38bbab89-7072-4d08-b475-b68639ee8cda": "Test Org"
+  }
+
+}
