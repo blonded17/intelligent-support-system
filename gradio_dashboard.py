@@ -3,13 +3,7 @@
 
 import gradio as gr
 from customer_query_handler import handle_customer_query
-from pymongo import MongoClient
 from bson import ObjectId
-
-MONGO_CLIENT = MongoClient(
-    "mongodb+srv://shubhambhatia2103:blonded17@cluster0.tdkyiq6.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0&tls=true",
-    readPreference='secondaryPreferred'
-)
 
 def query_handler(query):
     result = handle_customer_query(query)

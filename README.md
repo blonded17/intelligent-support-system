@@ -55,6 +55,22 @@ Intelligent Support System (ISA) is an AI-powered dashboard for analyzing custom
 2. **Open the provided local URL in your browser.**
 3. **Enter a customer query** (e.g., "Show all device logs for ICU in July 2025") and view the LLM analysis and database results.
 
+## RAG Workflow Information
+
+**How RAG Works in This Project:**
+
+- The user submits a query.
+- The LLM analyzes the query to extract intent, filters, or keywords.
+- The system uses those filters/keywords to fetch relevant data from MongoDB.
+- The retrieved data is then passed as context to the LLM, along with the original query.
+- The LLM uses both the query and the retrieved data to generate a final, context-aware answer.
+
+**Note:**
+- The LLM does not “check for data” in its own knowledge first. Instead, it always gets augmented with fresh, relevant data from your database before generating the answer. This ensures the response is up-to-date and grounded in your actual data, not just the LLM’s training.
+- If you want a fallback where the LLM tries to answer from its own knowledge first, and only uses RAG if it can’t, that’s a hybrid approach, but not standard RAG.
+
+---
+
 ## Configuration
 
 - **MongoDB Connection:** Update the connection string in `customer_query_handler.py` and `gradio_dashboard.py` if using a different database.

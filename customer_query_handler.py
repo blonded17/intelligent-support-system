@@ -1,3 +1,15 @@
+# Helper to serialize MongoDB results (ObjectId to str)
+from bson import ObjectId
+
+def serialize_mongo_result(result):
+    if isinstance(result, list):
+        return [serialize_mongo_result(doc) for doc in result]
+    elif isinstance(result, dict):
+        return {k: serialize_mongo_result(v) for k, v in result.items()}
+    elif isinstance(result, ObjectId):
+        return str(result)
+    else:
+        return result
 # customer_query_handler.py
 # Python version of the customer query handler using Ollama and LangChain
 
@@ -8,9 +20,11 @@ import json
 import pprint
 
 ollama = ChatOllama(base_url="http://localhost:11434", model="phi3")
-
 # Create MongoDB client at startup (read-only)
-MONGO_CLIENT = MongoClient("mongodb+srv://shubhambhatia2103:blonded17@cluster0.tdkyiq6.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0&tls=true", readPreference='secondaryPreferred')
+MONGO_CLIENT = MongoClient(
+    "mongodb+srv://shubhambhatia2103:blonded17@cluster0.tdkyiq6.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0&ssl=true  ",
+    readPreference='secondaryPreferred'
+)
 DB = MONGO_CLIENT["logs"]  # Replace with your DB name
 COLLECTION = DB["device_logs"]  # Replace with your collection name
 
@@ -39,7 +53,10 @@ def analyze_query_with_llm(user_query):
       "fields": [ ... ]
     }}
     """
-    response = ollama.invoke(prompt)
+    try:
+        response = ollama.invoke(prompt)
+    except Exception as e:
+        return {"error": f"LLM invocation failed: {str(e)}"}
     # Extract text from AIMessage
     response_text = response.content if hasattr(response, 'content') else str(response)
     try:
@@ -47,23 +64,58 @@ def analyze_query_with_llm(user_query):
         json_end = response_text.rfind('}') + 1
         json_string = response_text[json_start:json_end]
         return json.loads(json_string)
-    except Exception:
-        return {"error": "Failed to parse LLM response", "raw": response_text}
+    except json.JSONDecodeError as e:
+        return {"error": f"JSON parsing failed: {str(e)}", "raw": response_text}
+    except Exception as e:
+        return {"error": f"Unexpected error during JSON parsing: {str(e)}", "raw": response_text}
 
 # RAG: Query MongoDB using LLM analysis (reuse client)
 def rag_query_database(analysis):
     filters = analysis.get("filters", {})
     fields = analysis.get("fields", [])
     projection = {field: 1 for field in fields} if fields else None
-    results = list(COLLECTION.find(filters, projection))
-    return results
+    try:
+        results = list(COLLECTION.find(filters, projection))
+        return results
+    except Exception as e:
+        return {"error": f"MongoDB query failed: {str(e)}"}
 
 
 # Main handler with hybrid logic
+
+# Generate a final answer using LLM and retrieved database results (true RAG)
+def generate_contextual_answer_with_llm(user_query, db_results):
+    # Summarize results for prompt (limit to first 5 for brevity)
+    if isinstance(db_results, list) and db_results:
+        safe_results = serialize_mongo_result(db_results[:5])
+        summary = json.dumps(safe_results, indent=2)
+    elif isinstance(db_results, dict) and "error" in db_results:
+        summary = db_results["error"]
+    else:
+        summary = "No results found."
+    prompt = f"""
+    You are a helpful assistant for a medical device log system.
+    The user asked: "{user_query}"
+    Here are the top relevant database results:
+    {summary}
+    Based on these results, provide a concise, user-friendly summary or answer to the user's query. If no results are found, say so.
+    """
+    try:
+        response = ollama.invoke(prompt)
+        return response.content if hasattr(response, 'content') else str(response)
+    except Exception as e:
+        return f"LLM invocation failed: {str(e)}"
+
 def handle_customer_query(user_query):
     analysis = analyze_query_with_llm(user_query)
     db_results = rag_query_database(analysis)
-    return {"status": "analyzed", "analysis": analysis, "db_results": db_results}
+    final_answer = generate_contextual_answer_with_llm(user_query, db_results)
+    return {
+        "status": "analyzed",
+        "analysis": analysis,
+        "db_results": db_results,
+        "final_answer": final_answer
+    }
 
 if __name__ == "__main__":
     user_query = input("Enter a customer query: ")
