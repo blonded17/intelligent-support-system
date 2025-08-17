@@ -22,8 +22,12 @@ import pprint
 ollama = ChatOllama(base_url="http://localhost:11434", model="phi3")
 # Create MongoDB client at startup (read-only)
 MONGO_CLIENT = MongoClient(
-    "mongodb+srv://shubhambhatia2103:blonded17@cluster0.tdkyiq6.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0&ssl=true  ",
-    readPreference='secondaryPreferred'
+    "mongodb+srv://shubhambhatia2103:blonded17@cluster0.tdkyiq6.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
+    # tlsCAFile="/Users/shubham/code/intelligent-support-system/atlas-ca.pem",
+    tls=True,
+    tlsAllowInvalidCertificates=True,   # only for dev
+    serverSelectionTimeoutMS=5000,      # 5s to connect
+    socketTimeoutMS=5000 
 )
 DB = MONGO_CLIENT["logs"]  # Replace with your DB name
 COLLECTION = DB["device_logs"]  # Replace with your collection name
