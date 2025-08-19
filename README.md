@@ -1,69 +1,33 @@
+# Intelligent Support System
 
-# Intelligent Support System (ISA)
+## Overview
 
-## Description
-
-Intelligent Support System (ISA) is an AI-powered dashboard for analyzing customer queries related to medical device logs. It leverages Large Language Models (LLMs) and Retrieval-Augmented Generation (RAG) to interpret user queries, extract relevant filters and fields, and fetch precise results from a MongoDB database. The system provides an intuitive Gradio-based web interface for seamless interaction.
-
-## Features
-
-- **Natural Language Query Analysis:** Uses LLMs to understand and extract intent, filters, and fields from user queries.
-- **RAG Database Search:** Automatically queries MongoDB for relevant device logs based on LLM analysis.
-- **Interactive Dashboard:** Gradio UI for entering queries and viewing both LLM analysis and database results.
-- **Schema-Aware Filtering:** Ensures only valid schema fields are used for database searches.
-- **Support for Multiple Device Types and Wards:** Configurable via `static_data.json`.
+This project is an intelligent support system for medical device logs, combining Large Language Models (LLMs) with Retrieval-Augmented Generation (RAG) to provide accurate, up-to-date answers to customer queries. The system uses LangChain, Ollama, MongoDB, and Gradio to deliver a seamless experience for both users and developers.
 
 ## Tech Stack
 
-- **Languages:** Python
-- **Frameworks/Libraries:** 
-  - [Gradio](https://gradio.app/) (UI)
-  - [LangChain](https://python.langchain.com/) (LLM integration)
-  - [Ollama](https://ollama.com/) (LLM backend)
-  - [PyMongo](https://pymongo.readthedocs.io/) (MongoDB client)
-- **Database:** MongoDB (Cloud)
-- **Other:** BSON (for MongoDB ObjectId handling), JSON
+- **Python**: Core programming language.
+- **LangChain**: Framework for LLM orchestration and RAG.
+- **Ollama**: Local LLM inference (using the `phi3` model).
+- **MongoDB**: Stores device logs and supports fast retrieval.
+- **Gradio**: Interactive web UI for customer queries.
 
-## Installation
+## Concepts Used
 
-1. **Clone the repository:**
-	```bash
-	git clone https://github.com/blonded17/intelligent-support-system.git
-	cd intelligent-support-system
-	```
+- **Retrieval-Augmented Generation (RAG)**: The LLM is always provided with fresh, relevant data from the database before generating a response, ensuring answers are grounded in real data.
+- **Schema-Guided Query Analysis**: The LLM extracts intent and filters from user queries using a strict schema, ensuring precise database searches.
+- **Secure Database Access**: MongoDB connection uses TLS (with options for development flexibility).
 
-2. **Set up Python environment (recommended):**
-	```bash
-	python3 -m venv venv
-	source venv/bin/activate
-	```
+## How Customer Queries Are Processed
 
-3. **Install dependencies:**
-	```bash
-	pip install gradio pymongo langchain-community
-	```
-
-4. **Start Ollama server (for LLM):**
-	- Follow [Ollama installation guide](https://ollama.com/download) and ensure it is running at `http://localhost:11434`.
-
-## Usage
-
-1. **Launch the Gradio dashboard:**
-	```bash
-	python gradio_dashboard.py
-	```
-2. **Open the provided local URL in your browser.**
-3. **Enter a customer query** (e.g., "Show all device logs for ICU in July 2025") and view the LLM analysis and database results.
-
-## RAG Workflow Information
-
-**How RAG Works in This Project:**
-
-- The user submits a query.
-- The LLM analyzes the query to extract intent, filters, or keywords.
-- The system uses those filters/keywords to fetch relevant data from MongoDB.
-- The retrieved data is then passed as context to the LLM, along with the original query.
-- The LLM uses both the query and the retrieved data to generate a final, context-aware answer.
+1. **User Input**: The user enters a query via the Gradio dashboard (`gradio_dashboard.py`).
+2. **LLM Analysis**: The query is sent to the function `handle_customer_query` in `customer_query_handler.py`, which internally uses `analyze_query_with_llm` to:
+   - Analyze the query using Ollama (LangChain integration)
+   - Extract intent (e.g., lookup, report, list)
+   - Extract filters (key-value pairs matching the database schema)
+3. **Database Search**: The extracted filters are used in `customer_query_handler.py` to query MongoDB for relevant device logs (using the `MongoClient` and the specified collection).
+4. **Response Generation**: The LLM combines its analysis with the retrieved data to generate a grounded, up-to-date answer. Serialization of results is handled by `serialize_mongo_result` in both `customer_query_handler.py` and `gradio_dashboard.py`.
+5. **Result Display**: The Gradio UI (`gradio_dashboard.py`, function `query_handler`) displays both the LLM’s analysis and the database results.
 
 **Note:**
 - The LLM does not “check for data” in its own knowledge first. Instead, it always gets augmented with fresh, relevant data from your database before generating the answer. This ensures the response is up-to-date and grounded in your actual data, not just the LLM’s training.
@@ -77,6 +41,55 @@ Intelligent Support System (ISA) is an AI-powered dashboard for analyzing custom
 - **Schema Fields:** Defined in `customer_query_handler.py` (`SCHEMA_FIELDS`).
 - **Static Data:** Device types, wards, and organization info are in `static_data.json`.
 - **Environment Variables:** For production, store sensitive credentials (like MongoDB URI) in environment variables or a `.env` file.
+
+## Local Setup
+
+1. **Install Python and pip**
+   - Download and install Python (includes pip) from the official website: [https://www.python.org/downloads/](https://www.python.org/downloads/)
+   - On macOS, you can also use Homebrew:
+     ```bash
+     brew install python
+     ```
+   - Verify installation:
+     ```bash
+     python3 --version
+     pip3 --version
+     ```
+
+2. **Clone the Repository**
+   ```bash
+   git clone <your-repo-url>
+   cd intelligent-support-system
+   ```
+
+3. **Create and Activate a Python Virtual Environment**
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
+
+4. **Install Dependencies**
+   ```bash
+   pip install langchain_community pymongo gradio bson
+   ```
+
+5. **Start Ollama**
+   - Download and install Ollama from [https://ollama.com/](https://ollama.com/)
+   - Start Ollama and pull the required model:
+     ```bash
+     ollama pull phi3
+     ollama serve
+     ```
+
+6. **Run the Gradio Dashboard**
+   ```bash
+   python gradio_dashboard.py
+   ```
+   - Access the dashboard in your browser at the provided local URL.
+
+7. **MongoDB Configuration**
+   - Ensure your MongoDB instance is running and accessible.
+   - Update the connection string in `customer_query_handler.py` if needed.
 
 ## Project Structure
 
@@ -97,7 +110,3 @@ Contributions are welcome! Please follow these steps:
 2. Create a new branch for your feature or bugfix.
 3. Submit a pull request with a clear description of your changes.
 4. Ensure your code is well-documented and tested.
-
-## License
-
-This project is currently unlicensed. If you wish to use or contribute, please contact the repository owner.
