@@ -46,16 +46,20 @@ def analyze_query_with_llm(user_query):
     When extracting filters and fields from the user query, use ONLY the exact field names from this schema:
     {SCHEMA_FIELDS}
     Given the following user query, extract:
-    - intent (lookup, report, list, etc.)
+    - intent (lookup, report, list, count, aggregate, etc.)
     - filters (key-value pairs for database search, using exact schema field names)
     - fields (which fields to return, using exact schema field names)
+    - aggregation (if the query requests an aggregate operation, specify the type, e.g., count, sum, avg, min, max and the field to aggregate on)
     User query: "{user_query}"
+    Respond ONLY in valid JSON format, with NO comments, explanations, or pseudo field names. The response must be strictly parseable JSON, for example:
     Respond in JSON format as:
     {{
       "intent": "...",
       "filters": {{ ... }},
-      "fields": [ ... ]
+      "fields": [ ... ],
+      :"aggregation": {{ "type": "count/sum/avg/min/max", "field": "..." }}
     }}
+    If no aggregation is requested, set aggregration to null or omit it. Do not include any comments, explanations, or pseudo field name in the JSON.
     """
     try:
         response = ollama.invoke(prompt)
@@ -77,6 +81,15 @@ def analyze_query_with_llm(user_query):
 def rag_query_database(analysis):
     filters = analysis.get("filters", {})
     fields = analysis.get("fields", [])
+    aggregation = analysis.get ("aggregation")
+    # Handle aggregation if requested
+    if aggregation and aggregation.get ("type") == "count":
+        try:
+            count = COLLECTION. count_documents(filters)
+            return {"count": count}
+        except Exception as e:
+            return {"error": f"MongoDB count query failed: {str(e)}"}
+    # You can add more aggregation types here (sum, avg, etc.)
     projection = {field: 1 for field in fields} if fields else None
     try:
         results = list(COLLECTION.find(filters, projection))
