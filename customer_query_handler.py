@@ -101,21 +101,24 @@ def rag_query_database(analysis):
 # Main handler with hybrid logic
 
 # Generate a final answer using LLM and retrieved database results (true RAG)
-def generate_contextual_answer_with_llm(user_query, db_results):
+def generate_contextual_answer_with_llm(user_query, db_results, analysis=None):
     # Summarize results for prompt (limit to first 5 for brevity)
     if isinstance(db_results, list) and db_results:
-        safe_results = serialize_mongo_result(db_results[:5])
+        safe_results = serialize_mongo_result(db_results[:20])
         summary = json.dumps(safe_results, indent=2)
     elif isinstance(db_results, dict) and "error" in db_results:
         summary = db_results["error"]
     else:
         summary = "No results found."
+    analysis_str = json.dumps(analysis, indent=2) if analysis else None
     prompt = f"""
     You are a helpful assistant for a medical device log system.
-    The user asked: "{user_query}"
-    Here are the top relevant database results:
+    The user asked: \"{user_query}\"
+    Query analysis (intent, filters, fields, aggregation):
+    {analysis_str}
+    Here are the top relevant database results (JSON):
     {summary}
-    Based on these results, provide a concise, user-friendly summary or answer to the user's query. If no results are found, say so.
+    Please generate a human-readable summary/description of the results, and also render the results as a markdown table (with appropriate headers and values). The table should be suitable for business users and downloadable as a report. If no results are found, say so. Your response should include both the description and the markdown table.
     """
     try:
         response = ollama.invoke(prompt)
@@ -126,7 +129,7 @@ def generate_contextual_answer_with_llm(user_query, db_results):
 def handle_customer_query(user_query):
     analysis = analyze_query_with_llm(user_query)
     db_results = rag_query_database(analysis)
-    final_answer = generate_contextual_answer_with_llm(user_query, db_results)
+    final_answer = generate_contextual_answer_with_llm(user_query, db_results, analysis)
     return {
         "status": "analyzed",
         "analysis": analysis,

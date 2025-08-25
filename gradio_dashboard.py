@@ -9,8 +9,10 @@ def query_handler(query):
     result = handle_customer_query(query)
     import json
     output = {
-        "LLM Analysis": result.get("analysis"),
-        "RAG Database Results": serialize_mongo_result(result.get("db_results"))
+        "User query": result.get("user_query"),
+        "LLM query analysis": result.get("analysis"),
+        "Database Result": serialize_mongo_result(result.get("db_results")),
+        "LLM query and DB result analysis": result.get("final_answer")
     }
     return json.dumps(output, indent=2)
 
