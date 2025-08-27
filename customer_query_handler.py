@@ -1,5 +1,6 @@
 # Helper to serialize MongoDB results (ObjectId to str)
 from bson import ObjectId
+from llm_provider import LLMProvider
 
 def serialize_mongo_result(result):
     if isinstance(result, list):
@@ -17,7 +18,7 @@ from pymongo import MongoClient
 import json
 import pprint
 
-ollama = ChatOllama(base_url="http://localhost:11434", model="phi3")
+llm_provider = LLMProvider(provider="ollama", model="mistral:7b", base_url="http://localhost:11434")
 
 # Create MongoDB client at startup (read-only)
 MONGO_CLIENT = MongoClient(
@@ -82,10 +83,16 @@ def map_fields(filters, fields, aggregation):
     mapped_fields = [FIELD_MAP.get(f, f) for f in fields] if fields else []
     mapped_aggregation = None
     if aggregation:
-        mapped_aggregation = {
-            "type": aggregation.get("type"),
-            "field": FIELD_MAP.get(aggregation.get("field"), aggregation.get("field"))
-        }
+        mapped_aggregation = {"type": aggregation.get("type")}
+        # Map 'field' if present
+        if "field" in aggregation:
+            mapped_aggregation["field"] = FIELD_MAP.get(aggregation.get("field"), aggregation.get("field"))
+        # Map 'group_by' if present
+        if "group_by" in aggregation:
+            mapped_aggregation["group_by"] = FIELD_MAP.get(aggregation.get("group_by"), aggregation.get("group_by"))
+        # Map 'count_field' if present
+        if "count_field" in aggregation:
+            mapped_aggregation["count_field"] = FIELD_MAP.get(aggregation.get("count_field"), aggregation.get("count_field")) if aggregation.get("count_field") != "*" else "*"
     return mapped_filters, mapped_fields, mapped_aggregation
 
 
@@ -94,12 +101,19 @@ def analyze_query_with_llm(user_query):
     You are a helpful assistant for a medical device log system.
     When extracting filters and fields from the user query, use ONLY the exact field names from this schema:
     {SCHEMA_FIELDS}
-    Rules:
-    - If user specifies fields, return only those.
-    - If user does not specify fields and intent is "list", return ALL fields.
-    - If user asks for "count", set aggregation = "count" and fields = [].
-    - Always use exact schema names (e.g., LogData.Ward, not Ward).
-    - Respond ONLY in valid JSON, no text, no comments.
+        Rules:
+        - If user specifies fields, return only those.
+        - If user does not specify fields and intent is "list", return ALL fields.
+        - If user asks for "count", set aggregation = "count" and fields = [].
+                                                    - If the user asks for the "most common", "most frequent", or "top" value of a field, ALWAYS use aggregation: group by that field, count occurrences, sort by count descending, and limit to 1. DO NOT use max or highest value. Example:
+                                                        "fields": ["LogData.TagDetail.AlertCode"],
+                                                        "aggregation": {{"type": "count", "group_by": "LogData.TagDetail.AlertCode", "count_field": "*"}}
+                                                    - Only use "max" aggregation if the user asks for the highest value (e.g., "What is the highest alert code?").
+                                            - For queries like "Which X had the highest number of Y?", set fields to only the group_by field, and aggregation to include type, group_by, and count_field ("*"). Example:
+                                                "fields": ["LogData.Ward"],
+                                                "aggregation": {{"type": "count", "group_by": "LogData.Ward", "count_field": "*"}}
+        - Always use exact schema names (e.g., LogData.Ward, not Ward).
+        - Respond ONLY in valid JSON, no text, no comments.
     Given the following user query, extract:
     - intent (lookup, report, list, count, aggregate, etc.)
     - filters (key-value pairs for database search, using exact schema field names)
@@ -116,7 +130,7 @@ def analyze_query_with_llm(user_query):
     If no aggregation is requested, set aggregation to null or omit it.
     """
     try:
-        response = ollama.invoke(prompt)
+        response = llm_provider.invoke(prompt)
     except Exception as e:
         return {"error": f"LLM invocation failed: {str(e)}"}
 
@@ -138,13 +152,42 @@ def rag_query_database(analysis):
         analysis.get("fields", []),
         analysis.get("aggregation")
     )
+    if aggregation is None:
+        aggregation = {}
+
+    # Backend safeguard: override incorrect aggregation for 'most common' queries
+    user_query = analysis.get('raw_query', '') if 'raw_query' in analysis else ''
+    if aggregation.get('type') in ['max', 'count/max']:
+        if any(kw in user_query.lower() for kw in ["most common", "most frequent", "top"]):
+            if fields:
+                group_field = fields[0]
+                aggregation = {
+                    "type": "count",
+                    "group_by": group_field,
+                    "count_field": "*"
+                }
     # Handle aggregation if requested
     if aggregation and aggregation.get("type") == "count":
-        try:
-            count = COLLECTION.count_documents(filters)
-            return {"count": count}
-        except Exception as e:
-            return {"error": f"MongoDB count query failed: {str(e)}"}
+        # Group-by aggregation for queries like "Which ward had the highest number of alerts?"
+        if aggregation.get("group_by"):
+            group_by = aggregation["group_by"]
+            count_field = aggregation.get("count_field", "*")
+            pipeline = [
+                {"$group": {"_id": f"${group_by}", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+                {"$limit": 1}
+            ]
+            try:
+                results = list(COLLECTION.aggregate(pipeline))
+                return results
+            except Exception as e:
+                return {"error": f"MongoDB aggregation pipeline failed: {str(e)}"}
+        else:
+            try:
+                count = COLLECTION.count_documents(filters)
+                return {"count": count}
+            except Exception as e:
+                return {"error": f"MongoDB count query failed: {str(e)}"}
     # More aggregation types can be added here
     projection = {field: 1 for field in fields} if fields else None
     try:
@@ -175,7 +218,7 @@ def generate_contextual_answer_with_llm(user_query, db_results, analysis=None):
     If no results are found, say so. 
     """
     try:
-        response = ollama.invoke(prompt)
+        response = llm_provider.invoke(prompt)
         return response.content if hasattr(response, 'content') else str(response)
     except Exception as e:
         return f"LLM invocation failed: {str(e)}"
