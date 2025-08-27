@@ -101,19 +101,25 @@ def analyze_query_with_llm(user_query):
     You are a helpful assistant for a medical device log system.
     When extracting filters and fields from the user query, use ONLY the exact field names from this schema:
     {SCHEMA_FIELDS}
-        Rules:
-        - If user specifies fields, return only those.
-        - If user does not specify fields and intent is "list", return ALL fields.
-        - If user asks for "count", set aggregation = "count" and fields = [].
-                                                    - If the user asks for the "most common", "most frequent", or "top" value of a field, ALWAYS use aggregation: group by that field, count occurrences, sort by count descending, and limit to 1. DO NOT use max or highest value. Example:
-                                                        "fields": ["LogData.TagDetail.AlertCode"],
-                                                        "aggregation": {{"type": "count", "group_by": "LogData.TagDetail.AlertCode", "count_field": "*"}}
-                                                    - Only use "max" aggregation if the user asks for the highest value (e.g., "What is the highest alert code?").
-                                            - For queries like "Which X had the highest number of Y?", set fields to only the group_by field, and aggregation to include type, group_by, and count_field ("*"). Example:
-                                                "fields": ["LogData.Ward"],
-                                                "aggregation": {{"type": "count", "group_by": "LogData.Ward", "count_field": "*"}}
-        - Always use exact schema names (e.g., LogData.Ward, not Ward).
-        - Respond ONLY in valid JSON, no text, no comments.
+    
+    IMPORTANT RULES (follow strictly):
+    1. If the user asks for the "most common", "most frequent", or "top" value of a field, you MUST:
+        - Set aggregation to: {{"type": "count", "group_by": <exact schema field>, "count_field": "*"}}
+        - Set fields to: [<exact schema field>]
+        - DO NOT use "max", "highest value", or similar aggregation types for these queries.
+        - Example: For "What is the most common alert code?", output:
+            "fields": ["LogData.TagDetail.AlertCode"],
+            "aggregation": {{"type": "count", "group_by": "LogData.TagDetail.AlertCode", "count_field": "*"}}
+    2. If the user asks for the "highest value" (e.g., "What is the highest alert code?"), use aggregation type "max" for that field.
+    3. For queries like "Which X had the highest number of Y?", set fields to only the group_by field, and aggregation to include type, group_by, and count_field ("*"). Example:
+        "fields": ["LogData.Ward"],
+        "aggregation": {{"type": "count", "group_by": "LogData.Ward", "count_field": "*"}}
+    4. If user specifies fields, return only those fields.
+    5. If user does not specify fields and intent is "list", return ALL fields.
+    6. If user asks for "count", set aggregation = "count" and fields = [].
+    7. Always use exact schema names (e.g., LogData.Ward, not Ward).
+    8. Respond ONLY in valid JSON, no text, no comments.
+    
     Given the following user query, extract:
     - intent (lookup, report, list, count, aggregate, etc.)
     - filters (key-value pairs for database search, using exact schema field names)
