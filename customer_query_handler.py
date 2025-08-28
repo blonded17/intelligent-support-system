@@ -93,6 +93,12 @@ def map_fields(filters, fields, aggregation):
         # Map 'count_field' if present
         if "count_field" in aggregation:
             mapped_aggregation["count_field"] = FIELD_MAP.get(aggregation.get("count_field"), aggregation.get("count_field")) if aggregation.get("count_field") != "*" else "*"
+        # Map 'sort_order' if present
+        if "sort_order" in aggregation:
+            mapped_aggregation["sort_order"] = aggregation.get("sort_order")
+        # Map 'limit' if present
+        if "limit" in aggregation:
+            mapped_aggregation["limit"] = aggregation.get("limit")
     return mapped_filters, mapped_fields, mapped_aggregation
 
 
@@ -103,22 +109,34 @@ def analyze_query_with_llm(user_query):
     {SCHEMA_FIELDS}
     
     IMPORTANT RULES (follow strictly):
-    1. If the user asks for the "most common", "most frequent", or "top" value of a field, you MUST:
-        - Set aggregation to: {{"type": "count", "group_by": <exact schema field>, "count_field": "*"}}
-        - Set fields to: [<exact schema field>]
-        - DO NOT use "max", "highest value", or similar aggregation types for these queries.
-        - Example: For "What is the most common alert code?", output:
-            "fields": ["LogData.TagDetail.AlertCode"],
-            "aggregation": {{"type": "count", "group_by": "LogData.TagDetail.AlertCode", "count_field": "*"}}
+    1. If the user asks for the "most common", "most frequent", "top", "least common", "least frequent", or "bottom" value of a field, you MUST:
+        - For "most common", "most frequent", or "top":
+            - Set aggregation to: {{"type": "count", "group_by": <exact schema field>, "count_field": "*", "sort_order": "desc", "limit": 1}}
+            - Set fields to: [<exact schema field>]
+            - DO NOT use "max", "highest value", or similar aggregation types for these queries.
+            - Example: For "What is the most common alert code?", output:
+                "fields": ["LogData.TagDetail.AlertCode"],
+                "aggregation": {{"type": "count", "group_by": "LogData.TagDetail.AlertCode", "count_field": "*", "sort_order": "desc", "limit": 1}}
+        - For "least common", "least frequent", or "bottom":
+            - Set aggregation to: {{"type": "count", "group_by": <exact schema field>, "count_field": "*", "sort_order": "asc", "limit": 1}}
+            - Set fields to: [<exact schema field>]
+            - DO NOT use "min", "lowest value", or similar aggregation types for these queries.
+            - Example: For "What is the least common alert code?", output:
+                "fields": ["LogData.TagDetail.AlertCode"],
+                "aggregation": {{"type": "count", "group_by": "LogData.TagDetail.AlertCode", "count_field": "*", "sort_order": "asc", "limit": 1}}
     2. If the user asks for the "highest value" (e.g., "What is the highest alert code?"), use aggregation type "max" for that field.
     3. For queries like "Which X had the highest number of Y?", set fields to only the group_by field, and aggregation to include type, group_by, and count_field ("*"). Example:
         "fields": ["LogData.Ward"],
         "aggregation": {{"type": "count", "group_by": "LogData.Ward", "count_field": "*"}}
-    4. If user specifies fields, return only those fields.
-    5. If user does not specify fields and intent is "list", return ALL fields.
-    6. If user asks for "count", set aggregation = "count" and fields = [].
-    7. Always use exact schema names (e.g., LogData.Ward, not Ward).
-    8. Respond ONLY in valid JSON, no text, no comments.
+    4. For queries asking for an average, sum, min, or max per group (e.g., "average execution duration per device type"), ALWAYS include a `group_by` field in the aggregation, set to the grouping field (e.g., "LogData.DeviceType").
+        - Example:
+            "fields": ["LogData.DeviceType"],
+            "aggregation": {{"type": "avg", "field": "LogData.ExecutionDuration", "group_by": "LogData.DeviceType"}}
+    5. If user specifies fields, return only those fields.
+    6. If user does not specify fields and intent is "list", return ALL fields.
+    7. If user asks for "count", set aggregation = "count" and fields = [].
+    8. Always use exact schema names (e.g., LogData.Ward, not Ward).
+    9. Respond ONLY in valid JSON, no text, no comments.
     
     Given the following user query, extract:
     - intent (lookup, report, list, count, aggregate, etc.)
@@ -174,15 +192,44 @@ def rag_query_database(analysis):
                 }
     # Handle aggregation if requested
     if aggregation and aggregation.get("type") == "count":
-        # Group-by aggregation for queries like "Which ward had the highest number of alerts?"
+        # Always run both most and least common pipelines for any 'common' query
         if aggregation.get("group_by"):
             group_by = aggregation["group_by"]
             count_field = aggregation.get("count_field", "*")
-            pipeline = [
+            limit = aggregation.get("limit", 1)
+            # Most common
+            pipeline_most = [
                 {"$group": {"_id": f"${group_by}", "count": {"$sum": 1}}},
                 {"$sort": {"count": -1}},
-                {"$limit": 1}
+                {"$limit": limit}
             ]
+            # Least common
+            pipeline_least = [
+                {"$group": {"_id": f"${group_by}", "count": {"$sum": 1}}},
+                {"$sort": {"count": 1}},
+                {"$limit": limit}
+            ]
+            print("Most common pipeline:", pipeline_most)
+            print("Least common pipeline:", pipeline_least)
+            try:
+                most_result = list(COLLECTION.aggregate(pipeline_most))
+                least_result = list(COLLECTION.aggregate(pipeline_least))
+                return {"most_common": most_result, "least_common": least_result}
+            except Exception as e:
+                return {"error": f"MongoDB aggregation pipeline failed: {str(e)}"}
+        elif aggregation.get("group_by"):
+            group_by = aggregation["group_by"]
+            count_field = aggregation.get("count_field", "*")
+            sort_order = aggregation.get("sort_order", "desc")
+            sort_direction = -1 if sort_order == "desc" else 1
+            limit = aggregation.get("limit", 1)
+            print(f"sort_order: {sort_order}, sort_direction: {sort_direction}, limit: {limit}")  # Debug print
+            pipeline = [
+                {"$group": {"_id": f"${group_by}", "count": {"$sum": 1}}},
+                {"$sort": {"count": sort_direction}},
+                {"$limit": limit}
+            ]
+            print("Aggregation pipeline:", pipeline)  # Debug print after line 201
             try:
                 results = list(COLLECTION.aggregate(pipeline))
                 return results
