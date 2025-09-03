@@ -101,3 +101,6 @@ Contributions are welcome! Please follow these steps:
 ## License
 
 This project is currently unlicensed. If you wish to use or contribute, please contact the repository owner.
+
+## Set virtual envrionment
+source /Users/shubham/code/intelligent-support-system/.venv/bin/activate  
