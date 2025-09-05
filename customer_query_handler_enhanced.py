@@ -30,52 +30,37 @@ MONGO_CLIENT = MongoClient(
     socketTimeoutMS=5000 
 )
 DB = MONGO_CLIENT["logs"]
-COLLECTION = DB["device_logs"]
+COLLECTION = DB["Alerts"]
 
-# Canonical schema fields
+# Canonical schema fields for Alerts collection
 SCHEMA_FIELDS = [
-    "OrganizationId", "DeviceId", "UserId", "TagId", "Timestamp", "Date", "Hour", "Month", "Year", "Index", "AppName", "LogLevel", "LogLabel", "LogSummary", "CreatedAt",
-    "LogData.DeviceName", "LogData.DeviceType", "LogData.Model", "LogData.LoggedEvent", "LogData.MessageType", "LogData.State", "LogData.StateCode", "LogData.Tag", "LogData.Description", "LogData.Ward", "LogData.EpochCount", "LogData.ExecutionDuration", "LogData.Timezone", "LogData.RequestId",
-    "LogData.TagDetail.AlertCode", "LogData.TagDetail.AlertLevel", "LogData.TagDetail.HeaderTime", "LogData.TagDetail.Key", "LogData.TagDetail.Message", "LogData.TagDetail.RequestId"
+    "OrganizationId", "DeviceId", "UserId", "Timestamp", "TimestampTz", 
+    "Ward", "ParameterKey", "ParameterValue", "LowerThreshold", "UpperThreshold", 
+    "Bound", "SmartAlertId", "Source", "Stage", "Status",
+    "_id.UserId", "_id.Timestamp", "_id.Source"
 ]
 
-# Flat-to-nested field map
+# Flat-to-nested field map for Alerts schema
 FIELD_MAP = {
     "OrganizationId": "OrganizationId",
     "DeviceId": "DeviceId",
     "UserId": "UserId",
-    "TagId": "TagId",
     "Timestamp": "Timestamp",
-    "Date": "Date",
-    "Hour": "Hour",
-    "Month": "Month",
-    "Year": "Year",
-    "Index": "Index",
-    "AppName": "AppName",
-    "LogLevel": "LogLevel",
-    "LogLabel": "LogLabel",
-    "LogSummary": "LogSummary",
-    "CreatedAt": "CreatedAt",
-    "DeviceName": "LogData.DeviceName",
-    "DeviceType": "LogData.DeviceType",
-    "Model": "LogData.Model",
-    "LoggedEvent": "LogData.LoggedEvent",
-    "MessageType": "LogData.MessageType",
-    "State": "LogData.State",
-    "StateCode": "LogData.StateCode",
-    "Tag": "LogData.Tag",
-    "Description": "LogData.Description",
-    "Ward": "LogData.Ward",
-    "EpochCount": "LogData.EpochCount",
-    "ExecutionDuration": "LogData.ExecutionDuration",
-    "Timezone": "LogData.Timezone",
-    "RequestId": "LogData.RequestId",
-    "AlertCode": "LogData.TagDetail.AlertCode",
-    "AlertLevel": "LogData.TagDetail.AlertLevel",
-    "HeaderTime": "LogData.TagDetail.HeaderTime",
-    "Key": "LogData.TagDetail.Key",
-    "Message": "LogData.TagDetail.Message",
-    "TagDetail.RequestId": "LogData.TagDetail.RequestId"
+    "TimestampTz": "TimestampTz",
+    "Ward": "Ward",
+    "ParameterKey": "ParameterKey",
+    "ParameterValue": "ParameterValue",
+    "LowerThreshold": "LowerThreshold",
+    "UpperThreshold": "UpperThreshold",
+    "Bound": "Bound",
+    "SmartAlertId": "SmartAlertId",
+    "Source": "Source",
+    "Stage": "Stage",
+    "Status": "Status",
+    # Nested _id fields
+    "IdUserId": "_id.UserId",
+    "IdTimestamp": "_id.Timestamp",
+    "IdSource": "_id.Source"
 }
 
 def map_fields(filters, fields, aggregation):
@@ -105,73 +90,155 @@ def map_fields(filters, fields, aggregation):
 
 def analyze_query_with_llm(user_query):
     prompt = f"""
-    You are a helpful assistant for a medical device log system.
-    Your task is to translate natural language questions into valid MongoDB aggregation pipeline instructions.
-    You must follow the schema exactly and output structured JSON.
-    When extracting filters and fields from the user query, use ONLY the exact field names from this schema:
-    {SCHEMA_FIELDS}
+    You are a helpful assistant for a patient alert analysis system. Your job is to translate natural language questions into valid MongoDB aggregation pipeline instructions, strictly following the schema and type rules below.
 
-    IMPORTANT RULES (follow strictly):
-    1. For any range query (date, time, numeric, etc.), ALWAYS extract filters as separate fields using MongoDB-compatible operators (e.g., $gte, $lte, $gt, $lt). NEVER use combined string conditions (e.g., ">=... AND ...<...").
-    Example: For "How many logs per day in June 2025?", output:
-    "filters": {{"Timestamp": {{"$gte": "2025-06-01T00:00:00", "$lte": "2025-06-30T23:59:59"}}}}, "fields": ["Date"], "aggregation": {{"type": "count", "group_by": "Date"}}
-    Example: For "Show logs with ExecutionDuration between 10 and 100", output:
-    "filters": {{"LogData.ExecutionDuration": {{"$gte": 10, "$lte": 100}}}}, "fields": ["LogData.ExecutionDuration"]
-    Example: For "Show logs with Timestamp >= '2025-06-01T00:00:00Z' AND Timestamp < '2026-06-01T00:00:00Z'", output:
-    "filters": {{"Timestamp": {{"$gte": "2025-06-01T00:00:00Z", "$lt": "2026-06-01T00:00:00Z"}}}}
-    1a. NEVER use combined string conditions in filters. ALWAYS use MongoDB operator format for all range filters.
-    2. If the user asks for "unique" values (e.g., "unique alert codes", "distinct device types", "list all unique wards"), OR if the query is to list a single field like "LogData.Ward", ALWAYS set aggregation to: {{"type": "group_by", "group_by": <exact schema field>}}.
-    Example: For "Give me unique alert codes", output:
-    "fields": ["LogData.TagDetail.AlertCode"], "aggregation": {{"type": "group_by", "group_by": "LogData.TagDetail.AlertCode"}}
-    Example: For "list all unique wards", output:
-    "fields": ["LogData.Ward"], "aggregation": {{"type": "group_by", "group_by": "LogData.Ward"}}
-    Example: For "list all wards", output:
-    "fields": ["LogData.Ward"], "aggregation": {{"type": "group_by", "group_by": "LogData.Ward"}}
-    Example: For "show wards", output:
-    "fields": ["LogData.Ward"], "aggregation": {{"type": "group_by", "group_by": "LogData.Ward"}}
-    3. If the user asks for the "most common", "most frequent", "top", "least common", "least frequent", or "bottom" value of a field, you MUST:
-    For "most common", "most frequent", or "top":
-    - Set aggregation to: {{"type": "count", "group_by": <exact schema field>, "count_field": "*", "sort_order": "desc", "limit": 1}}
-    - Set fields to: [<exact schema field>]
-    - DO NOT use "max", "highest value", or similar aggregation types for these queries.
-    For "least common", "least frequent", or "bottom":
-    - Set aggregation to: {{"type": "count", "group_by": <exact schema field>, "count_field": "*", "sort_order": "asc", "limit": 1}}
-    - Set fields to: [<exact schema field>]
-    - DO NOT use "min", "lowest value", or similar aggregation types for these queries.
-    4. If the user asks for the "highest value" (e.g., "What is the highest alert code?"), use aggregation type "max" for that field.
-    5. For queries like "Which X had the highest number of Y?" or "Which day had the maximum number of warnings?", ALWAYS set aggregation to:
-    "type": "count", "group_by": <group field>, "count_field": "*", "sort_order": "desc", "limit": 1
-    Example: For "Which day in July 2025 had the maximum number of warnings?", output:
-    "filters": {{"Month": "2025-07", "LogData.Tag": "warning"}}, "fields": ["Date"], "aggregation": {{"type": "count", "group_by": "Date", "count_field": "*", "sort_order": "desc", "limit": 1}}
-    6. For queries asking for an average, sum, min, or max per group (e.g., "average execution duration per device type"), ALWAYS include a `group_by` field in the aggregation, set to the grouping field (e.g., "LogData.DeviceType").
-    Example: For "Which device type had the highest average alert level?", output:
-    "fields": ["LogData.DeviceType"], "aggregation": {{"type": "avg", "field": "LogData.TagDetail.AlertLevel", "group_by": "LogData.DeviceType", "sort_order": "desc", "limit": 1}}
+    Alerts collection schema:
+    - Strings: OrganizationId, DeviceId, UserId, Ward, Status, ParameterKey, SmartAlertId, Timestamp, TimestampTz, Bound
+    - Integers: LowerThreshold, UpperThreshold, Stage, Source
+    - Floating-point: ParameterValue
+    - ObjectId: _id (with nested fields: UserId, Timestamp, Source)
 
-    6a. For queries asking for the count of unique/distinct devices per group (e.g., "Show the count of unique devices used in each ward"), ALWAYS use:
-    "type": "count_distinct", "group_by": <group field>, "distinct_field": <device field>, "sort_order": "desc"
-    Example: For "Show the count of unique devices used in each ward", output:
-    "fields": ["LogData.Ward"], "aggregation": {{"type": "count_distinct", "group_by": "LogData.Ward", "distinct_field": "LogData.DeviceName", "sort_order": "desc"}}
-    7. If user specifies fields, return only those fields.
-    8. If user does not specify fields and intent is "list", return ALL fields.
-    9. If user asks for "count", set aggregation = "count" and fields = [].
-    10. Always use exact schema names (e.g., LogData.Ward, not Ward).
-    11. Respond ONLY in valid JSON, no text, no comments.
+    Ward is always a string, even if it looks numeric. Only convert to integer for numeric operations (like sorting numerically) using $toInt or $convert, if explicitly required. Otherwise, treat as string.
+
+    Aggregation logic:
+    - Always filter by OrganizationId for organization-scoped queries.
+    - For queries asking "which X had the most alerts", group by X (e.g., Ward), count alerts using $sum: 1, sort descending, and limit 1.
+    - Group by the field relevant to the query (Ward, UserId, ParameterKey, DeviceId, etc.).
+    - Use $sum: 1 for counting alerts.
+    - Use $sort and $limit for "most", "top", etc.
+    - Use $addToSet for unique counts.
+    - For time-based queries, cast Timestamp to date if needed.
+
+    IMPORTANT LIMIT RULE:
+    - Only include "limit": 1 in the aggregation if the user explicitly asks for the "top", "most", "highest", "biggest", etc.
+    - For queries asking for "distribution", "per", "breakdown", "all", or similar, DO NOT include "limit" in the aggregation.
+    - When the user asks for the minimum or maximum ParameterValue for a specific parameter (such as BP, HR, SPO2, etc.) in an organization, ALWAYS include both OrganizationId and ParameterKey in the filters. Use the exact parameter name from the user query for ParameterKey.
+   
+    IMPORTANT PARAMETER FILTER RULE:
+        - For any query about minimum or maximum ParameterValue for a specific parameter (e.g., BP, HR, SPO2, etc.), you MUST include both OrganizationId and ParameterKey in the filters.
+        - The ParameterKey filter must use the exact parameter name mentioned in the user query.
+        - Example: If the user asks for "Minimum ParameterValue recorded for BP in organization OrgX", the filters must be {{ "OrganizationId": "OrgX", "ParameterKey": "BP" }}.
+
+    Example aggregations:
+    - "Minimum ParameterValue recorded for BP in organization OrgX"
+        Pipeline: $match on OrganizationId and ParameterKey, $group with _id: null, $min on ParameterValue
+        JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgX", "ParameterKey": "BP" }}, fields: ["ParameterValue"], aggregation: {{ "type": "min", "field": "ParameterValue" }}
+    - "Maximum ParameterValue recorded for HR in organization OrgY"
+        Pipeline: $match on OrganizationId and ParameterKey, $group with _id: null, $max on ParameterValue
+        JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgY", "ParameterKey": "HR" }}, fields: ["ParameterValue"], aggregation: {{ "type": "max", "field": "ParameterValue" }}
+    - "Minimum ParameterValue recorded for SPO2 in organization OrgZ"
+        Pipeline: $match on OrganizationId and ParameterKey, $group with _id: null, $min on ParameterValue
+        JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgZ", "ParameterKey": "SPO2" }}, fields: ["ParameterValue"], aggregation: {{ "type": "min", "field": "ParameterValue" }}
+   
+    IMPORTANT PARAMETER FILTER RULE:
+        - For any query about minimum or maximum ParameterValue for a specific parameter (e.g., BP, HR, SPO2, etc.), you MUST include both OrganizationId and ParameterKey in the filters.
+        - The ParameterKey filter must use the exact parameter name mentioned in the user query.
+        - Example: If the user asks for "Minimum ParameterValue recorded for BP in organization OrgX", the filters must be {{ "OrganizationId": "OrgX", "ParameterKey": "BP" }}.
+
+    Example aggregations:
+    - "Minimum ParameterValue recorded for BP in organization OrgX"
+        Pipeline: $match on OrganizationId and ParameterKey, $group with _id: null, $min on ParameterValue
+        JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgX", "ParameterKey": "BP" }}, fields: ["ParameterValue"], aggregation: {{ "type": "min", "field": "ParameterValue" }}
+    - "Maximum ParameterValue recorded for HR in organization OrgY"
+        Pipeline: $match on OrganizationId and ParameterKey, $group with _id: null, $max on ParameterValue
+        JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgY", "ParameterKey": "HR" }}, fields: ["ParameterValue"], aggregation: {{ "type": "max", "field": "ParameterValue" }}
+    - "Minimum ParameterValue recorded for SPO2 in organization OrgZ"
+        Pipeline: $match on OrganizationId and ParameterKey, $group with _id: null, $min on ParameterValue
+        JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgZ", "ParameterKey": "SPO2" }}, fields: ["ParameterValue"], aggregation: {{ "type": "min", "field": "ParameterValue" }}
+   
+   IMPORTANT $facet RULE:
+    - If the user asks for multiple aggregations in one query (e.g., "most and least", "min and max", "ward-wise and parameter-wise breakdown"), use MongoDB's $facet stage.
+    - Each facet should contain its own aggregation pipeline (e.g., sorting, grouping, limiting as needed).
+    - Always include all relevant filters (OrganizationId, ParameterKey, etc.) in the $match stage before $facet.
+    - For time-based trends, use $addFields to parse or convert the Timestamp field as needed before grouping.
+
+    Example:
+    - "Which ward has generated the most and least alerts in OrgX?"
+    Pipeline: $match on OrganizationId, $group by Ward, $sum, $facet with:
+        "most": [ $sort alertCount -1, $limit 1 ]
+        "least": [ $sort alertCount 1, $limit 1 ]
+    JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgX" }}, fields: ["Ward"], aggregation: {{ "type": "facet", "facets": {{
+        "most": {{ "type": "count", "group_by": "Ward", "sort_order": "desc", "limit": 1 }},
+        "least": {{ "type": "count", "group_by": "Ward", "sort_order": "asc", "limit": 1 }}
+    }}}}
+    - "What is the minimum and maximum ParameterValue recorded for BP in OrgX?"
+    Pipeline: $match on OrganizationId and ParameterKey, $facet with:
+        "minValue": [ $group _id: null, $min on ParameterValue ]
+        "maxValue": [ $group _id: null, $max on ParameterValue ]
+    JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgX", "ParameterKey": "BP" }}, fields: ["ParameterValue"], aggregation: {{ "type": "facet", "facets": {{
+        "minValue": {{ "type": "min", "field": "ParameterValue" }},
+        "maxValue": {{ "type": "max", "field": "ParameterValue" }}
+    }}}}
+- "Show me the daily alert trend and also which ward has generated the most alerts in organization OrgX"
+    Pipeline: $match on OrganizationId, $addFields to parse Timestamp, $facet with:
+        "dailyAlertTrend": [
+            {{ "$group": {{ "_id": {{ "$dateToString": {{ "format": "%Y-%m-%d", "date": "$parsedTimestamp" }} }}, "count": {{ "$sum": 1 }} }} }},
+            {{ "$sort": {{ "_id": 1 }} }}
+        ],
+        "topWard": [
+            {{ "$group": {{ "_id": "$Ward", "alertCount": {{ "$sum": 1 }} }} }},
+            {{ "$sort": {{ "alertCount": -1 }} }},
+            {{ "$limit": 1 }}
+        ]
+    JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgX" }}, aggregation: {{ "type": "facet", "add_fields": {{ "parsedTimestamp": {{ "$toDate": "$Timestamp" }} }},"facets": {{
+        "dailyAlertTrend": [
+            {{ "type": "count", "group_by": {{ "$dateToString": {{ "format": "%Y-%m-%d", "date": "$parsedTimestamp" }} }} }}
+        ],
+        "topWard": {{ "type": "count", "group_by": "Ward", "sort_order": "desc", "limit": 1 }}
+    }}}}
+    Example aggregations:
+    - "Which ward has the most alerts in Org X?"
+        Pipeline: $match on OrganizationId, $group by Ward, $sum, $sort desc, $limit 1
+        JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgX" }}, fields: ["Ward"], aggregation: {{ "type": "count", "group_by": "Ward", "sort_order": "desc", "limit": 1 }}
+    - "Which patient triggered the most alerts in Org Y last month?"
+        Pipeline: $match on OrganizationId + time window, $group by UserId, $sum, $sort desc, $limit 1
+        JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgY", "Timestamp": {{ "$gte": "2024-08-01", "$lte": "2024-08-31" }} }}, fields: ["UserId"], aggregation: {{ "type": "count", "group_by": "UserId", "sort_order": "desc", "limit": 1 }}
+    - "Show me ward-wise distribution of alerts in Org Z"
+        Pipeline: $match on OrganizationId, $group by Ward, $sum
+        JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgZ" }}, fields: ["Ward"], aggregation: {{ "type": "count", "group_by": "Ward" }}
+    - "How many alerts were generated per patient in Pediatric Ward in Org X?"
+        Pipeline: $match on OrganizationId and Ward, $group by UserId, $sum, $sort desc
+        JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgX", "Ward": "Pediatric Ward" }}, fields: ["UserId"], aggregation: {{ "type": "count", "group_by": "UserId", "sort_order": "desc" }}
+    - "Trend of alerts by day for Org X?"
+        Pipeline: $match on OrganizationId, $group by formatted date ($dateToString on Timestamp), $sum
+        JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgX" }}, fields: ["Timestamp"], aggregation: {{ "type": "count", "group_by": "Timestamp" }}
+    - "Minimum ParameterValue recorded for BP in organization OrgX"
+        Pipeline: $match on OrganizationId and ParameterKey, $group with _id: null, $min on ParameterValue
+        JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgX", "ParameterKey": "BP" }}, fields: ["ParameterValue"], aggregation: {{ "type": "min", "field": "ParameterValue" }}
+    - "Maximum ParameterValue recorded for SPO2 in organization OrgY"
+        Pipeline: $match on OrganizationId and ParameterKey, $group with _id: null, $max on ParameterValue
+        JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgY", "ParameterKey": "SPO2" }}, fields: ["ParameterValue"], aggregation: {{ "type": "max", "field": "ParameterValue" }}
+    - "What is the minimum and maximum ParameterValue recorded for XX in organization OrgX?"
+    Pipeline: $match on OrganizationId and ParameterKey, $group with _id: null, $min and $max on ParameterValue
+    JSON intent: "aggregate", filters: {{ "OrganizationId": "OrgX", "ParameterKey": "XX" }}, fields: ["ParameterValue"], aggregation: {{ "type": ["min", "max"], "field": "ParameterValue" }}
+  
+     IMPORTANT RULES:
+    1. Use MongoDB operators ($gte, $lte, $gt, $lt) for range queries. Never use combined string conditions.
+    2. Use only exact schema field names from the provided schema list.
+    3. For unique/distinct queries, use group_by aggregation.
+    4. For "most", "top", "least", "bottom" queries, use count aggregation, group_by the relevant field, sort, and limit.
+    5. For average, sum, min, max per group, include group_by in aggregation.
+    6. For count of unique devices per group, use count_distinct aggregation.
+    7. Always treat Ward as string unless numeric logic is explicitly required.
+    8. For time-based queries, use ISODate or string for Timestamp, and cast to date if grouping by time.
+    9. Never include comments in your JSON response.
+    10. Respond ONLY in valid JSON that can be parsed directly by json.loads(), with NO explanations or annotations.
 
     Given the following user query, extract:
     - intent (lookup, report, list, count, aggregate, etc.)
     - filters (key-value pairs for database search, using exact schema field names and MongoDB operators)
     - fields (which fields to return, using exact schema field names)
-    - aggregation (if the query requests an aggregate operation, specify the type, e.g., count, sum, avg, min, max and the field to aggregate on)
+    - aggregation (if the query requests an aggregate operation, specify the type, e.g., count, sum, avg, min, max and the field to aggregate on, and group_by if applicable)
     User query: "{user_query}"
     Respond ONLY in valid JSON format, with NO comments, explanations, or pseudo field names. The response must be strictly parseable JSON, for example:
     {{
-        "intent": "...",
-        "filters": {{ ... }},
-        "fields": [ ... ],
-        "aggregation": {{ "type": "count/sum/avg/min/max", "field": "..." }}
+        "intent": "aggregate",
+        "filters": {{ "OrganizationId": "OrgX" }},
+        "fields": ["Ward"],
+        "aggregation": {{ "type": "count", "group_by": "Ward", "sort_order": "desc", "limit": 1 }}
     }}
-    If no aggregation is requested, set aggregation to null or omit it.
     """
+
     try:
         response = llm_provider.invoke(prompt)
     except Exception as e:
@@ -182,12 +249,41 @@ def analyze_query_with_llm(user_query):
         json_start = response_text.find('{')
         json_end = response_text.rfind('}') + 1
         json_string = response_text[json_start:json_end]
+        import re
+        # Remove C-style comments (/* ... */)
+        json_string = re.sub(r'/\*.*?\*/', '', json_string, flags=re.DOTALL)
+        # Remove single-line comments (// ...)
+        json_string = re.sub(r'//.*?(\n|$)', '', json_string)
         return json.loads(json_string)
     except json.JSONDecodeError as e:
+        print(f"[DEBUG] Failed to parse JSON: {json_string}")
         return {"error": f"JSON parsing failed: {str(e)}", "raw": response_text}
     except Exception as e:
         return {"error": f"Unexpected error during JSON parsing: {str(e)}", "raw": response_text}
 
+
+
+def process_nested_id_fields(filters):
+    """
+    Process filters that target the nested _id structure in the Alerts collection.
+    MongoDB requires special handling for queries on nested fields within _id.
+    """
+    processed_filters = {}
+    for key, value in filters.items():
+        if key.startswith("_id."):
+            field_name = key.split(".", 1)[1]
+            if "_id" not in processed_filters:
+                processed_filters["_id"] = {}
+            if isinstance(value, dict) and all(k.startswith("$") for k in value.keys()):
+                for op, op_value in value.items():
+                    if field_name not in processed_filters["_id"]:
+                        processed_filters["_id"][field_name] = {}
+                    processed_filters["_id"][field_name][op] = op_value
+            else:
+                processed_filters["_id"][field_name] = value
+        else:
+            processed_filters[key] = value
+    return processed_filters
 
 def rag_query_database(analysis):
     # Defensive: If analysis is None or not a dict, return error early
@@ -208,6 +304,9 @@ def rag_query_database(analysis):
         analysis.get("fields", []),
         analysis.get("aggregation")
     )
+    
+    # Process any nested _id fields in the filters
+    filters = process_nested_id_fields(filters)
 
     if aggregation:
         agg_type = aggregation.get("type")
@@ -215,7 +314,7 @@ def rag_query_database(analysis):
         field = aggregation.get("field")
         sort_order = aggregation.get("sort_order", "desc")
         sort_direction = -1 if sort_order == "desc" else 1
-        limit = aggregation.get("limit", 1)
+        limit = aggregation.get("limit", None)  # <-- CHANGED: default to None
 
     print(f"[DEBUG] Aggregation type: {agg_type}, group_by: {group_by}, field: {field}, sort_order: {sort_order}, limit: {limit}")
 
@@ -243,10 +342,15 @@ def rag_query_database(analysis):
         pipeline = []
         if filters:
             pipeline.append({"$match": filters})
+        
+        # Determine the appropriate output field name based on the group_by field
+        output_field = "deviceCount"
+        id_field = group_by.split(".")[-1].lower() if "." in group_by else group_by.lower()
+        
         pipeline.extend([
-            {"$group": {"_id": f"${group_by}", "uniqueDevices": {"$addToSet": f"${distinct_field}"}}},
-            {"$project": {"ward": "$_id", "deviceCount": {"$size": "$uniqueDevices"}}},
-            {"$sort": {"deviceCount": sort_direction}}
+            {"$group": {"_id": f"${group_by}", "uniqueValues": {"$addToSet": f"${distinct_field}"}}},
+            {"$project": {id_field: "$_id", output_field: {"$size": "$uniqueValues"}}},
+            {"$sort": {output_field: sort_direction}}
         ])
         print(f"[DEBUG] Executing COUNT_DISTINCT aggregation pipeline: {pipeline}")
         try:
@@ -262,11 +366,10 @@ def rag_query_database(analysis):
         pipeline = []
         if filters:
             pipeline.append({"$match": filters})
-        pipeline.extend([
-            {"$group": {"_id": f"${group_by}", "count": {"$sum": 1}}},
-            {"$sort": {"count": sort_direction}},
-            {"$limit": limit}
-        ])
+        pipeline.append({"$group": {"_id": f"${group_by}", "alertCount": {"$sum": 1}}})
+        pipeline.append({"$sort": {"alertCount": sort_direction}})
+        if limit is not None:
+            pipeline.append({"$limit": limit})
         print(f"[DEBUG] Executing COUNT aggregation pipeline: {pipeline}")
         try:
             result = list(COLLECTION.aggregate(pipeline))
@@ -284,8 +387,9 @@ def rag_query_database(analysis):
         pipeline.extend([
             {"$group": {"_id": f"${group_by}", "average": {"$avg": f"${field}"}}},
             {"$sort": {"average": sort_direction}},
-            {"$limit": limit}
         ])
+        if limit is not None:
+            pipeline.append({"$limit": limit})
         print(f"[DEBUG] Executing AVG aggregation pipeline: {pipeline}")
         try:
             result = list(COLLECTION.aggregate(pipeline))
@@ -307,6 +411,105 @@ def rag_query_database(analysis):
             print(f"[DEBUG] COUNT (no group_by) error: {e}")
             return {"error": f"MongoDB count query failed: {str(e)}", "query": {"filters": filters, "type": "count_documents"}}
 
+    # Handle min aggregation
+    if agg_type == "min" and field:
+        pipeline = []
+        if filters:
+            pipeline.append({"$match": filters})
+        pipeline.append({"$group": {"_id": None, "minValue": {"$min": {"$toDouble": f"${field}"}}}})
+        print(f"[DEBUG] Executing MIN aggregation pipeline: {pipeline}")
+        try:
+            result = list(COLLECTION.aggregate(pipeline))
+            return {"data": result, "query": {"pipeline": pipeline, "type": "aggregate"}}
+        except Exception as e:
+            return {"error": f"MongoDB aggregation pipeline failed: {str(e)}", "query": {"pipeline": pipeline, "type": "aggregate"}}
+
+    # Handle max aggregation
+    if agg_type == "max" and field:
+        pipeline = []
+        if filters:
+            pipeline.append({"$match": filters})
+        pipeline.append({"$group": {"_id": None, "maxValue": {"$max": {"$toDouble": f"${field}"}}}})
+        print(f"[DEBUG] Executing MAX aggregation pipeline: {pipeline}")
+        try:
+            result = list(COLLECTION.aggregate(pipeline))
+            return {"data": result, "query": {"pipeline": pipeline, "type": "aggregate"}}
+        except Exception as e:
+            return {"error": f"MongoDB aggregation pipeline failed: {str(e)}", "query": {"pipeline": pipeline, "type": "aggregate"}}
+        
+    if agg_type == "facet" and "facets" in aggregation:
+        pipeline = []
+        if filters:
+            pipeline.append({"$match": filters})
+        if aggregation.get("add_fields"):
+            pipeline.append({"$addFields": aggregation["add_fields"]})
+        facet_stage = {}
+        for facet_name, facet_agg in aggregation["facets"].items():
+            facet_pipeline = []
+            # COUNT
+            if facet_agg["type"] == "count" and "group_by" in facet_agg:
+                facet_pipeline.append({"$group": {"_id": f"${facet_agg['group_by']}", "alertCount": {"$sum": 1}}})
+                facet_pipeline.append({"$sort": {"alertCount": -1 if facet_agg.get("sort_order", "desc") == "desc" else 1}})
+                if "limit" in facet_agg:
+                    facet_pipeline.append({"$limit": facet_agg["limit"]})
+            # MIN
+            if facet_agg["type"] == "min":
+                facet_pipeline.append({"$group": {"_id": None, "minValue": {"$min": {"$toDouble": f"${facet_agg['field']}"}}}})
+            # MAX
+            if facet_agg["type"] == "max":
+                facet_pipeline.append({"$group": {"_id": None, "maxValue": {"$max": {"$toDouble": f"${facet_agg['field']}"}}}})
+            # AVG
+            if facet_agg["type"] == "avg":
+                if "group_by" in facet_agg:
+                    facet_pipeline.append({"$group": {"_id": f"${facet_agg['group_by']}", "average": {"$avg": {"$toDouble": f"${facet_agg['field']}"}}}})
+                    facet_pipeline.append({"$sort": {"average": -1 if facet_agg.get("sort_order", "desc") == "desc" else 1}})
+                    if "limit" in facet_agg:
+                        facet_pipeline.append({"$limit": facet_agg["limit"]})
+                else:
+                    facet_pipeline.append({"$group": {"_id": None, "average": {"$avg": {"$toDouble": f"${facet_agg['field']}"}}}})
+            # SUM
+            if facet_agg["type"] == "sum":
+                if "group_by" in facet_agg:
+                    facet_pipeline.append({"$group": {"_id": f"${facet_agg['group_by']}", "sum": {"$sum": {"$toDouble": f"${facet_agg['field']}"}}}})
+                    facet_pipeline.append({"$sort": {"sum": -1 if facet_agg.get("sort_order", "desc") == "desc" else 1}})
+                    if "limit" in facet_agg:
+                        facet_pipeline.append({"$limit": facet_agg["limit"]})
+                else:
+                    facet_pipeline.append({"$group": {"_id": None, "sum": {"$sum": {"$toDouble": f"${facet_agg['field']}"}}}})
+            # Add more aggregation types as needed here
+            facet_stage[facet_name] = facet_pipeline
+        pipeline.append({"$facet": facet_stage})
+        print(f"[DEBUG] Executing FACET aggregation pipeline: {pipeline}")
+        try:
+            result = list(COLLECTION.aggregate(pipeline))
+            return {"data": result, "query": {"pipeline": pipeline, "type": "aggregate"}}
+        except Exception as e:
+            return {"error": f"MongoDB facet aggregation failed: {str(e)}", "query": {"pipeline": pipeline, "type": "aggregate"}}        
+
+    # Support combined min/max queries using $facet
+    if isinstance(agg_type, list) and "min" in agg_type and "max" in agg_type and field:
+        pipeline = []
+        if filters:
+            pipeline.append({"$match": filters})
+        pipeline.append({
+            "$facet": {
+                "minValue": [
+                    {"$group": {"_id": None, "minValue": {"$min": {"$toDouble": f"${field}"}}}}
+                ],
+                "maxValue": [
+                    {"$group": {"_id": None, "maxValue": {"$max": {"$toDouble": f"${field}"}}}}
+                ]
+            }
+        })
+        print(f"[DEBUG] Executing MIN/MAX FACET aggregation pipeline: {pipeline}")
+        try:
+            result = list(COLLECTION.aggregate(pipeline))
+            return {"data": result, "query": {"pipeline": pipeline, "type": "aggregate"}}
+        except Exception as e:
+            return {"error": f"MongoDB facet aggregation failed: {str(e)}", "query": {"pipeline": pipeline, "type": "aggregate"}}
+
+    # ...rest of your aggregation handlers...
+
     # Only run find if no aggregation type matched
     projection = {field: 1 for field in fields} if fields else None
     print(f"[DEBUG] Executing FIND query with filters: {filters}, projection: {projection}")
@@ -325,7 +528,7 @@ def generate_contextual_answer_with_llm(user_query, db_results, analysis=None, m
     
     # If db_results is a list and not empty, create enhanced presentation
     if isinstance(db_results, list) and db_results:
-        safe_results = serialize_mongo_result(db_results[:20])
+        safe_results = db_results
         
         # Handle various result formats for better presentation
         if len(safe_results) > 15:
@@ -367,9 +570,9 @@ def generate_contextual_answer_with_llm(user_query, db_results, analysis=None, m
     # Use different prompts for regular responses vs downloadable reports
     if make_downloadable:
         prompt = f"""
-        You are a professional report generator for a medical device log system.
+        You are a professional report generator for a patient alert analysis system.
         
-        # Medical Device Log Analytics Report
+        # Patient Alert Analytics Report
         
         ## Query Information
         User Query: "{user_query}"
@@ -384,8 +587,13 @@ def generate_contextual_answer_with_llm(user_query, db_results, analysis=None, m
            - Present the data in a clean markdown table
            - For large datasets, summarize key patterns or trends
         
-        3. ## Insights
+        3. ## Alert Analysis
+           - When relevant, explain the significance of ParameterValue in relation to LowerThreshold and UpperThreshold
+           - Comment on any patterns in the types of parameters triggering alerts (e.g., if blood pressure alerts are more common)
+        
+        4. ## Insights
            - Provide 2-3 key analytical insights derived from the data
+           - Focus on actionable information that could help improve patient care or reduce unnecessary alerts
         
         If the query produced no results, clearly state this in the Executive Summary.
         
@@ -397,16 +605,17 @@ def generate_contextual_answer_with_llm(user_query, db_results, analysis=None, m
         """
     else:
         prompt = f"""
-        You are a helpful assistant for a medical device log system.
+        You are a helpful assistant for a patient alert analysis system.
 
         The user asked: "{user_query}"
 
         Here's how you should respond:
         1. Start by rephrasing the user's question in plain language to confirm understanding.
-        2. Present the direct answer clearly (e.g., the least common alert code, most frequent ward, etc.).
+        2. Present the direct answer clearly (e.g., the most frequent alert type, most common ward generating alerts, etc.).
         3. Then, show the supporting database results in a clean markdown table with appropriate headers.
-        4. If the query produced no results, clearly say: "No results found for this query."
-        5. Add a short human-style explanation that connects the results back to the user's original question, like ChatGPT would when reasoning things out.
+        4. When relevant, provide context about the alerts by explaining the relationship between ParameterValue and threshold values (LowerThreshold/UpperThreshold).
+        5. If the query produced no results, clearly say: "No results found for this query."
+        6. Add a short human-style explanation that connects the results back to the user's original question, including potential clinical relevance of the findings when appropriate.
 
         Query analysis (intent, filters, fields, aggregation):
         {analysis_str}
@@ -463,6 +672,18 @@ def handle_customer_query(user_query, make_downloadable=False):
 
     processed_query = preprocess_time_phrases(user_query)
     analysis = analyze_query_with_llm(processed_query)
+
+    # Fix LLM filter key for organization queries
+    if isinstance(analysis, dict) and "filters" in analysis:
+        filters = analysis["filters"]
+        # If LLM used '_id.$oid' for organization, convert to 'OrganizationId'
+        if "_id.$oid" in filters:
+            filters["OrganizationId"] = filters.pop("_id.$oid")
+        # If LLM used '_id.$OrganizationId', convert to 'OrganizationId'
+        if "_id.$OrganizationId" in filters:
+            filters["OrganizationId"] = filters.pop("_id.$OrganizationId")
+        analysis["filters"] = filters
+
     db_result_obj = rag_query_database(analysis)
     
     # Extract the actual data and MongoDB query
