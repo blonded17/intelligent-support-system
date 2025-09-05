@@ -13,20 +13,45 @@ from datetime import datetime
 # Import our enhanced customer query handler
 from customer_query_handler_enhanced import handle_customer_query, serialize_mongo_result
 
+
 def query_handler(query, download_format):
     make_downloadable = download_format != "None"
     result = handle_customer_query(query, make_downloadable)
-    
-    # Format the response for display
-    output = {
-        "User query": query,
-        "LLM query analysis": result.get("analysis"),
-        "MongoDB query executed": json.dumps(result.get("mongo_query", "No query available"), indent=2),
-        "LLM query and DB result analysis": result.get("final_answer")
-    }
-    
-    formatted_output = json.dumps(output, indent=2)
-    
+
+    # Build a cleaner Markdown output
+    md_output = f"""### User Query
+
+{query}
+
+---
+
+### LLM Query Analysis
+
+{json.dumps(result.get("analysis"), indent=2)}
+
+---
+
+### MongoDB Query Executed
+
+```json
+{json.dumps(result.get("mongo_query", "No query available"), indent=2)}
+```
+
+---
+
+### Database Result
+
+```json
+{json.dumps(result.get("db_results"), indent=2)}
+```
+
+---
+
+### Final Answer
+
+{result.get("final_answer", "")}
+"""
+
     print(f"Result structure: {list(result.keys())}")
     print(f"Download format selected: {download_format}")
     print(f"raw_data in result: {'raw_data' in result}")
@@ -47,21 +72,17 @@ def query_handler(query, download_format):
                 f.write(json_str)
                 temp_path = f.name
             
-            return formatted_output, temp_path
+            return md_output, temp_path
         
         elif download_format == "CSV":
             # Convert data to pandas DataFrame for CSV export
             if isinstance(raw_data, list) and len(raw_data) > 0:
-                # For lists of dictionaries, convert to dataframe directly
                 df = pd.DataFrame(raw_data)
             elif isinstance(raw_data, dict):
-                # For single dictionaries or count results, convert to a single row dataframe
                 df = pd.DataFrame([raw_data])
             else:
-                # Empty or other formats
                 df = pd.DataFrame([{"result": "No data available"}])
             
-            # Convert DataFrame to CSV and save to temp file
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"query_results_{timestamp}.csv"
             
@@ -70,13 +91,10 @@ def query_handler(query, download_format):
                 df.to_csv(f, index=False)
                 temp_path = f.name
                 
-            return formatted_output, temp_path
+            return md_output, temp_path
         
         elif download_format == "HTML":
-            # Generate HTML from the markdown response
             md_content = result.get("final_answer")
-            
-            # Create simple HTML content
             html_content = f"""
             <!DOCTYPE html>
             <html>
@@ -106,7 +124,6 @@ def query_handler(query, download_format):
             </html>
             """
             
-            # Save to temp file
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"medical_device_report_{timestamp}.html"
             
@@ -115,10 +132,13 @@ def query_handler(query, download_format):
                 f.write(html_content)
                 temp_path = f.name
                 
-            return formatted_output, temp_path
+            return md_output, temp_path
+
+    # If no download requested, return just the formatted output
+    return md_output, None  # None is acceptable for gr.File when no file should be returned
     
     # If no download requested, return just the formatted output
-    return formatted_output, None  # None is acceptable for gr.File when no file should be returned
+    return md_output, None  # None is acceptable for gr.File when no file should be returned
 
 def serialize_mongo_result(result):
     if isinstance(result, list):
@@ -146,7 +166,7 @@ iface = gr.Interface(
         gr.Textbox(label="Query Results"),
         gr.File(label="Download Results")
     ],
-    title="Medical Device Log Analytics Dashboard",
+    title="ISA (Intelligent-Support-Assistant)",
     description="Enter a query about medical device logs and optionally download the results in your preferred format.",
     article="""
     ### How to use this dashboard
